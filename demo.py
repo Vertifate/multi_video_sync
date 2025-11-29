@@ -67,7 +67,7 @@ if __name__ == "__main__":
         image_paths = [target_cam.image_paths[max_idx]]
         
         # 在 worker_cam 中以 max_idx 为中心，构建一个搜索窗口 (例如 -2 到 +2)
-        search_window = [-3,-2, -1, 0, 1, 2,3]
+        search_window = [-2, -1, 0, 1, 2]
         num_worker_frames = len(worker_cam.image_paths)
         
         for offset in search_window:
