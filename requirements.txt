@@ -2,6 +2,6 @@ opencv-python
 numpy
 
 matplotlib
-
+PyQt5
 ./LightGlue
 
