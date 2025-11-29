@@ -1,17 +1,29 @@
-import cv2
-import torch
-import matplotlib.pyplot as plt
-import numpy as np
+import os
 from pathlib import Path
+import sys
+
+force_qt_ui = os.environ.get("FORCE_QT_UI", "0") == "1"
+force_headless = os.environ.get("FORCE_HEADLESS", "0") == "1"
+has_display = os.environ.get("DISPLAY", "") != ""
+ 
+
+import cv2
+import torch 
+import numpy as np
 
 # 添加LightGlue到路径
-import sys
-sys.path.append('LightGlue')
+project_root = Path(__file__).resolve().parent.parent
+lightglue_path = project_root / "LightGlue"
+if lightglue_path.is_dir():
+    sys.path.insert(0, str(lightglue_path))
+else:
+    raise FileNotFoundError(f"LightGlue directory not found at {lightglue_path}")
 
-from LightGlue.lightglue import LightGlue, SuperPoint, DISK
-from LightGlue.lightglue.utils import load_image, rbd
-from LightGlue.lightglue import viz2d
+from lightglue import LightGlue, SuperPoint, DISK
+from lightglue.utils import load_image, rbd
+ 
 
+ 
 
 class MultiImageMatcher:
     def __init__(self, device=None):
@@ -27,7 +39,7 @@ class MultiImageMatcher:
             self.device = device
             
         # 加载特征提取器和匹配器
-        self.extractor = SuperPoint(max_num_keypoints=2048).eval().to(self.device)
+        self.extractor = SuperPoint(max_num_keypoints=2048000).eval().to(self.device)
         self.matcher = LightGlue(features="superpoint").eval().to(self.device)
         
     def load_images(self, image_paths):
@@ -104,33 +116,71 @@ class MultiImageMatcher:
         
         return images, matches_results
     
-    def visualize_matches(self, images, matches_results, image_paths=None):
+    def visualize_matches(self, images, matches_results, image_paths=None, save_dir=None):
         """
-        可视化匹配结果
+        使用OpenCV可视化匹配结果。
         
         Args:
             images: 图像列表
             matches_results: 匹配结果列表
             image_paths: 图像路径列表（可选）
+            save_dir: 保存可视化结果的目录路径（可选）
         """
         num_matches = len(matches_results)
+        main_image_np = (images[0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+        
+        if save_dir:
+            save_path = Path(save_dir)
+            save_path.mkdir(exist_ok=True, parents=True)
         
         for i in range(num_matches):
-            # 创建子图
-            axes = viz2d.plot_images([images[0], images[i+1]])
+            matches, m_kpts0, m_kpts1 = matches_results[i]
+            print(f'第{i+1}张图像与主图像之间找到 {len(matches)} 个匹配点')
+
+            # 准备OpenCV需要的数据格式
+            # 将 PyTorch 的 RGB tensor 转换为 OpenCV 的 BGR numpy 数组
+            main_image_bgr = cv2.cvtColor((images[0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+            curr_image_bgr = cv2.cvtColor((images[i+1].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
             
-            # 绘制匹配点
-            _, m_kpts0, m_kpts1 = matches_results[i]
-            viz2d.plot_matches(m_kpts0, m_kpts1, color="lime", lw=0.2)
+            # 将torch tensor关键点转换为cv2.KeyPoint对象列表
+            kpts0_cv = [cv2.KeyPoint(p[0].item(), p[1].item(), 1) for p in m_kpts0]
+            kpts1_cv = [cv2.KeyPoint(p[0].item(), p[1].item(), 1) for p in m_kpts1]
             
-            # 添加文本标签
+            # 创建DMatch对象
+            dmatches = [cv2.DMatch(_queryIdx=j, _trainIdx=j, _distance=0) for j in range(len(kpts0_cv))]
+            
+            # 使用cv2.drawMatches绘制匹配
+            match_img = cv2.drawMatches(main_image_bgr, kpts0_cv, curr_image_bgr, kpts1_cv, dmatches, None, 
+                                        matchColor=(0, 255, 0),  # BGR for lime green
+                                        singlePointColor=None, 
+                                        flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+
+            window_title = "Matches"
             if image_paths:
-                viz2d.add_text(0, f'{image_paths[0].name}')
-                viz2d.add_text(1, f'{image_paths[i+1].name}')
-                
-            print(f'找到 {len(m_kpts0)} 个匹配点')
+                window_title = f"{image_paths[0].name} vs {image_paths[i+1].name}"
+
+            if save_dir:
+                output_filename = save_path / f"match_{image_paths[0].stem}_vs_{image_paths[i+1].stem}.png"
+                cv2.imwrite(str(output_filename), match_img)
+                print(f"匹配结果已保存到: {output_filename}")
+
+            # --- 调整图像大小以便于显示 ---
+            max_display_width = 1920  # 设置显示窗口的最大宽度
+            h, w = match_img.shape[:2]
             
-        plt.show()
+            if w > max_display_width:
+                scale = max_display_width / w
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+                display_img = cv2.resize(match_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            else:
+                display_img = match_img
+
+            cv2.imshow(window_title, display_img)
+            key = cv2.waitKey(0) # 等待按键
+            if key == ord('q') or key == 27: # 如果是'q'或'Esc'
+                break # 退出循环
+        cv2.destroyAllWindows()
 
 
 # 原始示例代码的使用方式
@@ -142,7 +192,7 @@ if __name__ == "__main__":
     matcher = MultiImageMatcher(device)
     
     # 加载图像
-    data_dir = Path(r"D:\code\multi_video_sync\data\test")
+    data_dir = Path(r"/home/crgj/wdd/data/sync/metashape/frame000026/test/")
     image_paths = sorted(list(data_dir.iterdir()))  # 加载所有图像
     
     if len(image_paths) < 2:
@@ -152,9 +202,7 @@ if __name__ == "__main__":
     # 处理图像
     images, matches_results = matcher.process_image_paths(image_paths)
     
-    # 输出结果信息
-    for i, (matches, m_kpts0, m_kpts1) in enumerate(matches_results):
-        print(f'第{i+1}张图像与主图像之间找到 {len(matches)} 个匹配点')
-    
     # 可视化结果（可选）
-    matcher.visualize_matches(images, matches_results, image_paths)
+    # matcher.visualize_matches(images, matches_results, image_paths)
+    # 将可视化结果保存到 'output' 文件夹
+    matcher.visualize_matches(images, matches_results, image_paths, save_dir="output")

@@ -188,8 +188,15 @@ def process_all_cameras(loader, group_size=30, thresh=20, expand_iters=4, refere
 
 # 方便的 main 示例
 def main():
+    # 动态处理路径，以便脚本可以直接运行
+    import sys
+    from pathlib import Path
+    # 将项目根目录（multi_video_sync）添加到 sys.path
+    project_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(project_root))
+    
     from dataloader import dataloader
-    root_dir = "metashape"   # 修改为你的数据根目录
+    root_dir = "/home/crgj/wdd/data/sync/metashape/"   # 修改为你的数据根目录
     loader = dataloader(root_dir)
     process_all_cameras(loader, group_size=30, thresh=20, expand_iters=4, reference_camera=None)
 

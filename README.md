@@ -32,6 +32,8 @@
 
     ```bash
     pip install -r requirements.txt
+    cd LightGlue
+    python -m pip install -e .
     ```
 
 2. **准备数据**
