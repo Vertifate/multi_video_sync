@@ -4,6 +4,15 @@ import os
 import sys
 from pathlib import Path
 
+
+#环境配置：添加上级目录到 sys.path 以导入 dataloader
+current_dir = Path(__file__).resolve().parent
+parent_dir = current_dir.parent
+if str(parent_dir) not in sys.path:
+    sys.path.insert(0, str(parent_dir))
+ 
+from dataloader import dataloader 
+
 # ==========================================
 # 基础图像处理工具
 # ==========================================
@@ -15,7 +24,7 @@ def compute_diff_gray(img1, img2):
     diff = cv2.absdiff(gray1, gray2)
     return diff
 
-def postprocess_mask(diff, thresh=20, open_kernel=(5,5), median_k=5, expand_kernel=(16,16), expand_iters=5):
+def postprocess_mask(diff, thresh=20, open_kernel=(5,5), median_k=5, closing_kernel=(30,30), closing_iters=1):
     """从 diff 生成二值 mask 并做滤波/开运算/扩张"""
     _, mask = cv2.threshold(diff, thresh, 255, cv2.THRESH_BINARY)
     
@@ -28,10 +37,10 @@ def postprocess_mask(diff, thresh=20, open_kernel=(5,5), median_k=5, expand_kern
         kernel = np.ones(open_kernel, np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     
-    # 膨胀操作，让mask覆盖范围更大一点，保证遮住运动物体
-    if expand_iters and expand_iters > 0:
-        ek = np.ones(expand_kernel, np.uint8)
-        mask = cv2.dilate(mask, ek, iterations=expand_iters)
+    # 闭运算（先膨胀再腐蚀），用于填充物体内部的空洞，并平滑边缘
+    if closing_iters and closing_iters > 0:
+        kernel = np.ones(closing_kernel, np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=closing_iters)
         
     return mask
 
@@ -71,7 +80,7 @@ def save_mask_motion_folder(img_path, mask):
 # 核心逻辑
 # ==========================================
 
-def process_sequence(loader, thresh=20, expand_iters=4):
+def detect_motion(loader, thresh=20, closing_iters=2):
     """
     处理加载器中的序列：
     1. 找出运动最大的一帧。
@@ -87,7 +96,7 @@ def process_sequence(loader, thresh=20, expand_iters=4):
     num_images = len(images)
     if num_images < 2:
         print("Error: 图片数量少于2帧，无法计算运动。")
-        return
+        return None
 
     print(f"Processing sequence: {num_images} frames loaded.")
 
@@ -107,7 +116,7 @@ def process_sequence(loader, thresh=20, expand_iters=4):
 
     if max_idx == -1:
         print("Warning: 未检测到有效运动。")
-        return
+        return None
 
     # 3. 获取最大运动帧的信息
     target_img = images[max_idx]
@@ -120,54 +129,45 @@ def process_sequence(loader, thresh=20, expand_iters=4):
     except:
         frame_folder = "unknown_frame"
 
-    print("=" * 50)
-    print(f"Result for Camera {loader.target_camera_id}:")
-    print(f"  Max Motion Frame Index: {max_idx} (in sequence)")
-    print(f"  Frame Folder: {frame_folder}")
-    print(f"  Image Path: {target_path}")
-    print(f"  Motion Score: {max_score}")
-
     # 4. 生成 Mask
     raw_diff = compute_diff_gray(prev_img, target_img)
-    mask = postprocess_mask(raw_diff, thresh=thresh, expand_iters=expand_iters)
+    mask = postprocess_mask(raw_diff, thresh=thresh, closing_iters=closing_iters)
     
-    # 5. 保存 Mask 到 motion_mask 文件夹
-    saved_path = save_mask_motion_folder(target_path, mask)
-    print(f"  Motion Mask Saved to: {saved_path}")
-    print("=" * 50)
+    # 5. 将结果打包成字典返回
+    result = {
+        "camera_id": loader.target_camera_id,
+        "max_motion_index": max_idx,
+        "frame_folder": frame_folder,
+        "target_image_path": target_path,
+        "motion_score": max_score,
+        "mask": mask,
+        "target_image": target_img,
+        "prev_image": prev_img,
+        "raw_diff": raw_diff
+    }
 
+    return result
 
 # ==========================================
 # Main
 # ==========================================
 
 def main():
-    # 1. 环境配置：添加上级目录到 sys.path 以导入 dataloader
-    current_dir = Path(__file__).resolve().parent
-    parent_dir = current_dir.parent
-    if str(parent_dir) not in sys.path:
-        sys.path.insert(0, str(parent_dir))
-    
-    try:
-        from dataloader import dataloader
-    except ImportError:
-        print("Error: 无法在父目录找到 dataloader.py")
-        return
 
-    # 2. 参数设置
-    root_dir = "/home/jinzhecui/Project/multi_sync/metashape"  # 修改为你的数据根目录
+    # 1. 参数设置
+    root_dir = "/home/crgj/wdd/data/sync/metashape/"  # 修改为你的数据根目录
     target_cam = "001"  # 指定相机序号
     
     if not os.path.exists(root_dir):
         print(f"Error: 目录不存在 {root_dir}")
         return
 
-    # 3. 初始化 DataLoader (使用新的 API)
+    # 2. 初始化 DataLoader (使用新的 API)
     print(f"Initializing DataLoader for camera {target_cam}...")
     loader = dataloader(root_dir, target_cam)
     
-    # 4. 执行处理
-    process_sequence(loader, thresh=20, expand_iters=4)
+    # 3. 执行处理
+    detect_motion(loader, thresh=20, closing_iters=2)
 
 if __name__ == "__main__":
     main()

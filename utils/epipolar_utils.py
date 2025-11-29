@@ -160,7 +160,7 @@ class EpipolarCalculator:
 if __name__ == "__main__":
     # 这是一个完整的集成示例，演示如何结合 dataloader 和 match_utils
     from dataloader import DataLoader
-    from untils.match_utils import MultiImageMatcher
+    from utils.match_utils import MultiImageMatcher
     from pathlib import Path
 
     # --- 1. 使用 DataLoader 加载数据 ---
