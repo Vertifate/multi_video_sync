@@ -3,4 +3,5 @@ numpy
 
 matplotlib
 
-pip install -e ./LightGlue
+./LightGlue
+
