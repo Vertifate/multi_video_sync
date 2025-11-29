@@ -395,3 +395,12 @@ if __name__ == "__main__":
     
     # 随机读取并打印某个相机的内外参数
     loader.print_random_camera_info()
+# 方便的 main 示例
+def main():
+    from dataloader import dataloader
+    root_dir = "metashape"   # 修改为你的数据根目录
+    loader = dataloader(root_dir)
+    process_all_cameras(loader, group_size=30, thresh=20, expand_iters=4, reference_camera=None)
+
+if __name__ == "__main__":
+    main()
