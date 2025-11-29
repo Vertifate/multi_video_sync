@@ -1,115 +1,92 @@
 import numpy as np
 
-# ==========================================
-# 核心数学工具函数
-# ==========================================
-
-def qvec2rotmat(qvec):
+def calculate_batch_spatial_distances(pts1, K1, R1, T1, pts2, K2, R2, T2):
     """
-    如果你读取的数据是四元数 (qw, qx, qy, qz)，
-    可以使用此函数将其转换为旋转矩阵 R。
+    批量计算两组匹配点对应的空间射线距离。
+    
+    :param pts1: 视角1的点集，形状 (N, 2)，格式 [(u1, v1), (u2, v2), ...]
+    :param K1:   视角1的内参矩阵 (3x3)
+    :param R1:   视角1的旋转矩阵 (3x3, World-to-Camera)
+    :param T1:   视角1的平移向量 (3,)
+    :param pts2: 视角2的点集，形状 (N, 2)
+    :param K2:   视角2的内参矩阵 (3x3)
+    :param R2:   视角2的旋转矩阵 (3x3)
+    :param T2:   视角2的平移向量 (3,)
+    :return:     距离数组，形状 (N,)
     """
-    w, x, y, z = qvec
-    return np.array([
-        [1 - 2*y**2 - 2*z**2, 2*x*y - 2*z*w, 2*x*z + 2*y*w],
-        [2*x*y + 2*z*w, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*x*w],
-        [2*x*z - 2*y*w, 2*y*z + 2*x*w, 1 - 2*x**2 - 2*y**2]
-    ])
+    # 确保输入是 numpy 数组
+    pts1 = np.array(pts1)
+    pts2 = np.array(pts2)
+    
+    if pts1.shape[0] != pts2.shape[0]:
+        raise ValueError(f"两个点集的数量不一致: {pts1.shape[0]} vs {pts2.shape[0]}")
 
-def pixel_to_ray(u, v, K, R, T):
-    """
-    将像素坐标转换为世界坐标系下的射线起点 (Origin) 和方向 (Direction)。
-    :param u, v: 像素坐标
-    :param K: 内参矩阵 (3x3)
-    :param R: 旋转矩阵 (3x3, World-to-Camera)
-    :param T: 平移向量 (3,)
-    :return: (origin, direction_world)
-    """
-    # 计算相机中心 (射线起点) 在世界坐标系的位置
-    # 公式: center = -R^T * T
-    R_inv = R.T
-    origin = -R_inv @ T
+    # ==========================================
+    # 1. 批量计算射线 (Vectorized Pixel to Ray)
+    # ==========================================
+    def batch_pixel_to_ray(pts, K, R, T):
+        # 准备数据
+        N = pts.shape[0]
+        R_inv = R.T
+        K_inv = np.linalg.inv(K)
+        
+        # 1. 计算原点 (所有射线共享同一个相机中心)
+        # Origin = -R^T * T
+        origin = -R_inv @ T  # shape (3,)
 
-    # 像素坐标齐次化
-    pixel_h = np.array([u, v, 1.0])
+        # 2. 像素坐标齐次化 (N, 2) -> (3, N)
+        # 添加一列 1.0
+        ones = np.ones((N, 1))
+        pixel_h = np.hstack([pts, ones]).T  # 变为 (3, N) 以便矩阵乘法
+        
+        # 3. 转换方向 (Camera系)
+        dir_cam = K_inv @ pixel_h       # (3, 3) @ (3, N) -> (3, N)
+        
+        # 4. 转换方向 (World系)
+        dir_world = R_inv @ dir_cam     # (3, 3) @ (3, N) -> (3, N)
+        
+        # 5. 归一化方向向量 (按列归一化)
+        norms = np.linalg.norm(dir_world, axis=0)
+        dir_world_norm = dir_world / norms
+        
+        return origin, dir_world_norm.T # 返回 (3,) 和 (N, 3)
 
-    # 转换到相机坐标系方向
-    K_inv = np.linalg.inv(K)
-    direction_cam = K_inv @ pixel_h
+    # 获取两组射线的参数
+    O1, D1 = batch_pixel_to_ray(pts1, K1, R1, T1) # O1: (3,), D1: (N, 3)
+    O2, D2 = batch_pixel_to_ray(pts2, K2, R2, T2) # O2: (3,), D2: (N, 3)
 
-    # 转换到世界坐标系方向
-    direction_world = R_inv @ direction_cam
+    # ==========================================
+    # 2. 批量计算异面直线距离
+    # ==========================================
     
-    # 归一化
-    direction_world = direction_world / np.linalg.norm(direction_world)
+    # 两个相机中心之间的向量 W0 = O1 - O2
+    W0 = O1 - O2 # shape (3,)
     
-    return origin, direction_world
-
-def compute_skew_line_distance(O1, D1, O2, D2):
-    """
-    计算两条异面直线 (Skew Lines) 之间的最短距离。
-    :param O1, D1: 射线1的起点和方向
-    :param O2, D2: 射线2的起点和方向
-    :return: 距离 (float)
-    """
-    W0 = O1 - O2
-    cross_prod = np.cross(D1, D2)
-    cross_norm = np.linalg.norm(cross_prod)
+    # 计算所有对应射线的叉积 (D1 x D2)
+    # np.cross 在 axis=1 上操作，结果 shape (N, 3)
+    cross_prod = np.cross(D1, D2) 
     
-    # 如果方向向量平行 (叉积接近0)
-    if cross_norm < 1e-6:
-        return np.linalg.norm(np.cross(D1, W0))
+    # 计算叉积的模长 (分母)
+    cross_norm = np.linalg.norm(cross_prod, axis=1) # shape (N,)
     
-    return np.abs(np.dot(W0, cross_prod)) / cross_norm
-
-# ==========================================
-# 主计算接口
-# ==========================================
-
-def calculate_spatial_distance(pt1, K1, R1, T1, pt2, K2, R2, T2):
-    """
-    计算两个视角下对应点生成的射线在三维空间中的最短距离。
+    # 计算分子: |W0 · (D1 x D2)|
+    # 由于 W0 是常数向量，我们将其广播到 N 个点上进行点积
+    # dot(A, B) row-wise 可以写成 sum(A * B, axis=1)
+    numerator = np.abs(np.sum(W0 * cross_prod, axis=1)) # shape (N,)
     
-    :param pt1: 视角1的像素坐标 (u, v) / list / tuple / np.array
-    :param K1:  视角1的内参矩阵 (3x3)
-    :param R1:  视角1的旋转矩阵 (3x3)
-    :param T1:  视角1的平移向量 (3,)
-    :param pt2: 视角2的像素坐标 (u, v)
-    :param K2:  视角2的内参矩阵 (3x3)
-    :param R2:  视角2的旋转矩阵 (3x3)
-    :param T2:  视角2的平移向量 (3,)
-    :return:    空间距离 (float)
-    """
-    # 1. 计算第一条射线
-    O1, D1 = pixel_to_ray(pt1[0], pt1[1], K1, R1, T1)
+    # 处理分母接近 0 的情况 (射线平行)
+    # 为了避免除以0，创建一个安全的 mask
+    epsilon = 1e-8
+    valid_mask = cross_norm > epsilon
     
-    # 2. 计算第二条射线
-    O2, D2 = pixel_to_ray(pt2[0], pt2[1], K2, R2, T2)
+    distances = np.zeros_like(cross_norm)
     
-    # 3. 计算异面直线距离
-    dist = compute_skew_line_distance(O1, D1, O2, D2)
+    # 正常情况：直接应用公式 d = |W0 . (D1 x D2)| / |D1 x D2|
+    distances[valid_mask] = numerator[valid_mask] / cross_norm[valid_mask]
     
-    return dist
-
-# ==========================================
-# 使用示例 (测试用)
-# ==========================================
-if __name__ == "__main__":
-    # 假设你已经从自己的代码中读取到了以下数据：
-    
-    # 模拟数据：视角 1
-    point1 = (1843.5, 940.2)
-    K1 = np.array([[2000, 0, 960], [0, 2000, 540], [0, 0, 1]]) # 假设内参
-    R1 = np.eye(3)                                          # 假设旋转
-    T1 = np.zeros(3)                                        # 假设平移
-    
-    # 模拟数据：视角 2 (假设向右移动了 1个单位)
-    point2 = (1843.5, 940.2) 
-    K2 = np.array([[2000, 0, 960], [0, 2000, 540], [0, 0, 1]])
-    R2 = np.eye(3)
-    T2 = np.array([-1.0, 0, 0]) 
-
-    # 调用函数计算
-    distance = calculate_spatial_distance(point1, K1, R1, T1, point2, K2, R2, T2)
-    
-    print(f"Calculated Spatial Distance: {distance}")
+    # 平行情况 (极少见)：退化为点到直线的距离 |D1 x W0| / |D1| (由于D1归一化了，分母为1)
+    if (~valid_mask).any():
+        parallel_cross = np.cross(D1[~valid_mask], W0)
+        distances[~valid_mask] = np.linalg.norm(parallel_cross, axis=1)
+        
+    return distances
