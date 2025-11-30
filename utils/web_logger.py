@@ -107,6 +107,16 @@ class WebLogger:
             
             f.write(f'  </div>\n</div>\n')
 
+    def add_html_snippet(self, html_content, title=None):
+        """向日志中添加一个原始的HTML代码片段（例如图表）。"""
+        self.step_count += 1
+        title = title or f"Step {self.step_count}: Interactive Chart"
+        with open(self.log_path, "a", encoding="utf-8") as f:
+            f.write(f'<div class="log-entry">\n')
+            f.write(f'  <div class="step">{title}</div>\n')
+            f.write(f'  {html_content}\n')
+            f.write(f'</div>\n')
+
     def close(self):
         """关闭HTML标签。"""
         with open(self.log_path, "a", encoding="utf-8") as f:

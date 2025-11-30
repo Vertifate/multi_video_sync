@@ -172,14 +172,11 @@ class DataLoader:
                     target_colmap_cam_id = img_obj.camera_id
                     break # 假设每一帧里该相机只有一张图
         
-        # 2. 如果找到了目标图片，且我们还没加载过相机参数，则读取 cameras.bin
-        if target_colmap_cam_id is not None and target_colmap_cam_id not in self.cameras:
-            cameras_bin = sparse_dir / "cameras.bin"
-            if cameras_bin.exists():
-                all_cameras = read_cameras_binary(cameras_bin)
-                if target_colmap_cam_id in all_cameras:
-                    print(f"Loaded camera parameters for ID {self.target_camera_id} (Internal ID: {target_colmap_cam_id})")
-                    self.cameras[target_colmap_cam_id] = all_cameras[target_colmap_cam_id]
+        # 2. 读取该帧中所有的相机参数
+        cameras_bin = sparse_dir / "cameras.bin"
+        if cameras_bin.exists():
+            all_cameras_in_frame = read_cameras_binary(cameras_bin)
+            self.cameras.update(all_cameras_in_frame) # 将新读取的相机参数合并到总字典中
 
     def load_sequence(self):
         """
@@ -196,23 +193,20 @@ class DataLoader:
         for frame_dir in frame_dirs:
             frame_id = frame_dir.name
             
-            # 1. 检查物理图像文件是否存在
+            # 1. 总是尝试加载COLMAP数据
+            self.load_colmap_data(frame_dir, frame_id)
+
+            # 2. 检查物理图像文件是否存在，并构建 image_paths 列表
             images_dir = frame_dir / "images"
             if not images_dir.exists():
                 continue
             
-            # 寻找匹配的文件 (例如 001.jpg, 001.png)
-            found_img_path = None
+            # (这部分逻辑在您的上一个版本中已经修复，保持不变)
             for ext in ['.jpg', '.png', '.jpeg', '.JPG', '.PNG']:
                 p = images_dir / (self.target_camera_id + ext)
                 if p.exists():
-                    found_img_path = p
+                    self.image_paths.append(str(p))
                     break
-            
-            if found_img_path:
-                self.image_paths.append(str(found_img_path))
-                # 2. 只有当图片存在时，才去加载对应的COLMAP位姿数据
-                self.load_colmap_data(frame_dir, frame_id)
         
         print(f"Done. Found {len(self.image_paths)} images and {len(self.cameras)} camera param sets.")
 
@@ -231,10 +225,11 @@ class DataLoader:
     def get_camera_params(self):
         """
         返回加载的唯一相机参数对象
+        注意：这个函数现在可能意义不大，因为loader会加载所有相机的参数。
+        但为了向后兼容，我们保留它，它会返回找到的第一个相机参数。
         """
         if not self.cameras:
             return None
-        # 返回字典中的第一个（也是唯一一个）值
         return list(self.cameras.values())[0]
 
     def print_info(self):

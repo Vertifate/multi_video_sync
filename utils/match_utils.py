@@ -40,7 +40,7 @@ class MultiImageMatcher:
         # --- 更换为 ALIKED 特征提取器 ---
         self.extractor = SuperPoint(
             max_num_keypoints=8192,          # 或 None(更慢更占显存)
-            detection_threshold=0.0005       # 比 0.005 密很多
+            detection_threshold=0.0003       # 比 0.005 密很多
         ).eval().to(self.device)
 
         self.matcher = LightGlue(
